@@ -99,7 +99,7 @@
 (define (interp exp env defs)
   (type-case CF1WAE exp
     [num (n) n]
-    [binop (op l r) (op (interp l) (interp r))]
+    [binop (op l r) (op (interp l env defs) (interp r env defs))]
     [with (bindings body)
           (begin
             (define names (map binding-name bindings))
@@ -108,8 +108,8 @@
               (error 'interp 
                      "var name appears more than once in bindings: ~v"
                      names))
-            (define rhs-vals (map num (map interp rhses env defs)))
-            (define new-env (map hash-set env names rhs-vals))
+            (define rhs-vals (map (lambda (expr) (interp expr env defs)) rhses))
+            (define new-env (foldl (lambda (n v e) (hash-set e n v)) (hash) names rhs-vals))
             (interp body new-env defs))]
     [app (name args) 
          (type-case FunDef (lookup-fundef name defs)
@@ -128,7 +128,7 @@
               (first fundefs)
               (lookup-fundef fun-name (rest fundefs)))]))
 
-; lookup-env : symbol env -> CF1WAE
+; lookup-env : symbol env -> number
 (define (lookup-env name env)
   (cond
     [(hash-has-key? env name) (hash-ref env name)]
@@ -150,13 +150,12 @@
 (define duplicated-var-msg "var name appears more than once")
 
 (test (interp (parse '3) (hash) empty) 3)
-;(test (interp (parse '{+ 3 4})) 7)
-;(test (interp (parse '{/ 12 6})) 2)
-;(test (interp (parse '{* 12 7})) 84)
-;(test (interp (parse '{- 12 5})) 7)
-(interp (parse '{with {{a = 6}} 5}) (hash) empty)
+(test (interp (parse '{+ 3 4}) (hash) empty) 7)
+(test (interp (parse '{/ 12 6}) (hash) empty) 2)
+(test (interp (parse '{* 12 7}) (hash) empty) 84)
+(test (interp (parse '{- 12 5}) (hash) empty) 7)
 (test (interp (parse '{with {{a = 6}} 5}) (hash) empty) 5)
-;(test (interp (parse '{with {{a = 6}} a})) 6)
+(test (interp (parse '{with {{a = 6}} a}) (hash) empty) 6)
 ;(test (interp (parse '{with {{a = 6}} {+ a 13}})) 19)
 ;(test (interp (parse '{with {{a = 7} {b = 8}} {+ 4 {* a b}}})) 60)
 ;(test/exn (interp (parse '{with {{a = 7} {b = 3} {a = 9}} 13})) duplicated-var-msg)
