@@ -13,45 +13,66 @@
 ; represents an expression
 (define-type CF1WAE
   [num (n number?)]
-  ;[str (s string?)]
-  ;[bool (b boolean?)]
-  ;[mt]
-  ;[unop (op any/c) (arg CF1WAE?)]
+  [str (s string?)]
+  [bool (b boolean?)]
+  [mt]
+  [unop (op any/c) (arg CF1WAE?)]
   [binop (op any/c) (lhs CF1WAE?) (rhs CF1WAE?)]
   [with (lob (listof Binding?)) (body CF1WAE?)]
   [varref (name symbol?)]
   ;[switch (val CF1WAE?) (clauses (listof SClause?)) (elseval CF1WAE?)]
   [app (f symbol?) (arg CF1WAE?)])
 
-;; parse : s-exp -> CF1WAE
+; represents a possible result of evaluation
+(define-type CF1WAE-Value
+  [numV (n number?)]
+  [strV (s string?)]
+  [boolV (b boolean?)]
+  [mtV]
+  [pairV (first CF1WAE-Value?) (rest CF1WAE-Value?)])
+
+; parse-fun : s-exp? -> FunDef?
+; This procedure parses an s-expression into a FunDef
+(define (parse-fun exp)
+  (error "DONT CALL THIS YET"))
+
+;; parse-exp : s-exp -> CF1WAE
 ;; Consumes an s-expression and generates the corresponding CF1WAE
-(define (parse sexp)
+(define (parse-exp sexp)
   (match sexp
     [(? number? n)                   (num n)]
     [(? symbol? s)                   (varref s)]
-    [(list (? op-symbol? s) lhs rhs) (binop (symbol->op s) (parse lhs) (parse rhs))]
+    [(list (? unop-symbol? s) body) (unop (symbol->op s) (parse-exp body))]
+    [(list (? binop-symbol? s) lhs rhs) (binop (symbol->op s) (parse-exp lhs) (parse-exp rhs))]
     [(list 'with (? list? bindings) body)
                                      (with (map parse-binding bindings) 
-                                           (parse body))]
-    [(list (? symbol? name) arg) (app name (parse arg))]
-    [else                            (error 'parse "* bad syntax: ~v" sexp)]))
+                                           (parse-exp body))]
+    [(list (? symbol? name) arg) (app name (parse-exp arg))]
+    [else                            (error 'parse-exp "* bad syntax: ~v" sexp)]))
 
 ;; parse-binding : sexp -> Binding
 ;; Consumes an s-expression and generates a Binding
 (define (parse-binding b)
  (match b
-   [(list (? symbol? name) '= rhs) (binding name (parse rhs))]
+   [(list (? symbol? name) '= rhs) (binding name (parse-exp rhs))]
    [else (error 'parse-binding "bad syntax for binding: ~v" b)]))
 
 ;; op-symbol? : symbol -> boolean
 ;; returns true exactly when s is a symbol representing a legal binop
-(define (op-symbol? s)
+(define (binop-symbol? s)
   (member s (list '+ '- '* '/)))
+
+;; op-symbol? : symbol -> boolean
+;; returns true exactly when s is a symbol representing a legal binop
+(define (unop-symbol? s)
+  (member s (list 'not 'number? 'pair? 'string? 'null? 'first 'rest)))
 
 ;; symbol->op : symbol -> (number number -> number)
 ;; Returns the binop that corresponds to a binop symbol
 (define (symbol->op s)
-  (case s [(+) +] [(-) -] [(*) *] [(/) /] 
+  (case s [(+) +] [(-) -] [(*) *] [(/) /]
+    [(not) not] [(number?) number?] [(pair?) pair?] [(string?) string?]
+    [(null?) null?] [(first) first] [(rest) rest]
     [else (error 'symbol->op 
                  "internal error: expected binop-symbol, got: ~v" s)]))
 
@@ -62,35 +83,35 @@
 (let ([n11 (num 11)]
       [n12 (num 12)])
  
-  (test (parse '13) (num 13))
-  (test (parse '{+ 11 12}) (binop + n11 n12))
-  (test (parse '{- 11 12}) (binop - n11 n12))
-  (test (parse '{* 11 12}) (binop * n11 n12))
-  (test (parse '{/ 11 12}) (binop / n11 n12))
-  (test (parse '{* {+ 11 12} 11}) (binop * (binop + n11 n12) n11))
-  (test (parse '{with {{ab = {+ 11 12}} {cd = {with {{de = 4}} 6}}} cd})
+  (test (parse-exp '13) (num 13))
+  (test (parse-exp '{+ 11 12}) (binop + n11 n12))
+  (test (parse-exp '{- 11 12}) (binop - n11 n12))
+  (test (parse-exp '{* 11 12}) (binop * n11 n12))
+  (test (parse-exp '{/ 11 12}) (binop / n11 n12))
+  (test (parse-exp '{* {+ 11 12} 11}) (binop * (binop + n11 n12) n11))
+  (test (parse-exp '{with {{ab = {+ 11 12}} {cd = {with {{de = 4}} 6}}} cd})
         (with (list (binding 'ab (binop + n11 n12))
                     (binding 'cd (with (list (binding 'de (num 4))) (num 6))))
               (varref 'cd)))
-  (test (parse '{with {} {+ 3 4}})
+  (test (parse-exp '{with {} {+ 3 4}})
         (with (list) (binop + (num 3) (num 4))))
-  (test (parse '{with {{z = 4} {y = 9}} {+ y z}})
+  (test (parse-exp '{with {{z = 4} {y = 9}} {+ y z}})
         (with (list (binding 'z (num 4))
                     (binding 'y (num 9)))
               (binop + (varref 'y) (varref 'z))))
   ;; error checking
-  (test/exn (parse '{+ 3 4 5}) "bad syntax")
-  (test/exn (parse '{_ 2 3}) "bad syntax")
-  (test/exn (parse '{with {} 3 4 5}) "bad syntax")
-  (test/exn (parse "abc") "bad syntax")
-  (test/exn (parse '{with 3 4}) "bad syntax")
-  (test/exn (parse '{with {{a b c}} 4}) "bad syntax")
-  (test/exn (parse '{with {{3 4}} 4})  "bad syntax"))
+  (test/exn (parse-exp '{+ 3 4 5}) "bad syntax")
+  (test/exn (parse-exp '{_ 2 3}) "bad syntax")
+  (test/exn (parse-exp '{with {} 3 4 5}) "bad syntax")
+  (test/exn (parse-exp "abc") "bad syntax")
+  (test/exn (parse-exp '{with 3 4}) "bad syntax")
+  (test/exn (parse-exp '{with {{a b c}} 4}) "bad syntax")
+  (test/exn (parse-exp '{with {{3 4}} 4})  "bad syntax"))
 
-(test (parse '{func (+ 1 2)}) (app 'func (binop + (num 1) (num 2))))
-(test (parse '{func 1}) (app 'func (num 1)))
-(test (parse '{double {double 5}}) (app 'double (app 'double (num 5))))
-(test (parse '{+ {f 5} {g 6}}) (binop + (app 'f (num 5)) (app 'g (num 6))))
+(test (parse-exp '{func (+ 1 2)}) (app 'func (binop + (num 1) (num 2))))
+(test (parse-exp '{func 1}) (app 'func (num 1)))
+(test (parse-exp '{double {double 5}}) (app 'double (app 'double (num 5))))
+(test (parse-exp '{+ {f 5} {g 6}}) (binop + (app 'f (num 5)) (app 'g (num 6))))
 
 ; interp : CF1WAE? immutable-hash-table? (listof FunDef?) -> CF1WAE-Value?
 ; This procedure interprets the given CF1WAE in the given
@@ -99,6 +120,10 @@
 (define (interp exp env defs)
   (type-case CF1WAE exp
     [num (n) n]
+    [str  (s) s]
+    [bool (b) b]
+    [mt () empty]
+    [unop (op body) (op (interp body env defs))]
     [binop (op l r) (op (interp l env defs) (interp r env defs))]
     [with (bindings body)
           (begin
@@ -148,17 +173,20 @@
 (define unbound-var-msg "unbound variable")
 (define duplicated-var-msg "var name appears more than once")
 
-(test (interp (parse '3) (hash) empty) 3)
-(test (interp (parse '{+ 3 4}) (hash) empty) 7)
-(test (interp (parse '{/ 12 6}) (hash) empty) 2)
-(test (interp (parse '{* 12 7}) (hash) empty) 84)
-(test (interp (parse '{- 12 5}) (hash) empty) 7)
-(test (interp (parse '{with {{a = 6}} 5}) (hash) empty) 5)
-(test (interp (parse '{with {{a = 6}} a}) (hash) empty) 6)
-(test (interp (parse '{with {{a = 6}} {+ a 13}}) (hash) empty) 19)
-(test (interp (parse '{with {{a = 7} {b = 8}} {+ 4 {* a b}}}) (hash) empty) 60)
-(test/exn (interp (parse '{with {{a = 7} {b = 3} {a = 9}} 13}) (hash) empty) duplicated-var-msg)
-(test/exn (interp (parse '{with {{a = 7}} b}) (hash) empty) "not defined")
+(test (interp (parse-exp '3) (hash) empty) 3)
+(test (interp (parse-exp '{+ 3 4}) (hash) empty) 7)
+(test (interp (parse-exp '{/ 12 6}) (hash) empty) 2)
+(test (interp (parse-exp '{* 12 7}) (hash) empty) 84)
+(test (interp (parse-exp '{- 12 5}) (hash) empty) 7)
+(test (interp (parse-exp '{with {{a = 6}} 5}) (hash) empty) 5)
+(test (interp (parse-exp '{with {{a = 6}} a}) (hash) empty) 6)
+(test (interp (parse-exp '{with {{a = 6}} {+ a 13}}) (hash) empty) 19)
+(test (interp (parse-exp '{with {{a = 7} {b = 8}} {+ 4 {* a b}}}) (hash) empty) 60)
+(test/exn (interp (parse-exp '{with {{a = 7} {b = 3} {a = 9}} 13}) (hash) empty) duplicated-var-msg)
+(test/exn (interp (parse-exp '{with {{a = 7}} b}) (hash) empty) "not defined")
 
-(test (interp (parse '{a 5}) (hash) (list (fundef 'a 'x (varref 'x)))) 5)
-(test (interp (parse '{with {{x = 1}} {a 7}}) (hash) (list (fundef 'a 'x (varref 'x)))) 7)
+(test (interp (parse-exp '{number? 1}) (hash) empty) true)
+
+(test (interp (parse-exp '{a 5}) (hash) (list (fundef 'a 'x (varref 'x)))) 5)
+(test (interp (parse-exp '{with {{x = 1}} {a 7}}) (hash) (list (fundef 'a 'x (varref 'x)))) 7)
+(test/exn (interp (parse-exp '{a 5}) (hash) empty) "function not")
