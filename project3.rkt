@@ -4,7 +4,7 @@
 
 ; represents a function definition
 (define-type FunDef
-  (fundef (name symbol?) (params (listof symbol?)) (body CF1WAE?)))
+  (fundef (name symbol?) (params symbol?) (body CF1WAE?)))
  
 ; represents a binding in a with expression
 (define-type Binding
@@ -124,9 +124,8 @@
 (define (lookup-fundef fun-name fundefs)
   (cond
     [(empty? fundefs) (error fun-name "function not found")]
-    [else (if (symbol=? fun-name (fundef-name (first fundefs)))
-              (first fundefs)
-              (lookup-fundef fun-name (rest fundefs)))]))
+    [(symbol=? fun-name (fundef-name (first fundefs))) (first fundefs)]
+    [else (lookup-fundef fun-name (rest fundefs))]))
 
 ; lookup-env : symbol env -> number
 (define (lookup-env name env)
@@ -156,7 +155,10 @@
 (test (interp (parse '{- 12 5}) (hash) empty) 7)
 (test (interp (parse '{with {{a = 6}} 5}) (hash) empty) 5)
 (test (interp (parse '{with {{a = 6}} a}) (hash) empty) 6)
-;(test (interp (parse '{with {{a = 6}} {+ a 13}})) 19)
-;(test (interp (parse '{with {{a = 7} {b = 8}} {+ 4 {* a b}}})) 60)
-;(test/exn (interp (parse '{with {{a = 7} {b = 3} {a = 9}} 13})) duplicated-var-msg)
-;(test/exn (interp (parse '{with {{a = 7}} b})) unbound-var-msg)
+(test (interp (parse '{with {{a = 6}} {+ a 13}}) (hash) empty) 19)
+(test (interp (parse '{with {{a = 7} {b = 8}} {+ 4 {* a b}}}) (hash) empty) 60)
+(test/exn (interp (parse '{with {{a = 7} {b = 3} {a = 9}} 13}) (hash) empty) duplicated-var-msg)
+(test/exn (interp (parse '{with {{a = 7}} b}) (hash) empty) "not defined")
+
+(test (interp (parse '{a 5}) (hash) (list (fundef 'a 'x (varref 'x)))) 5)
+(test (interp (parse '{with {{x = 1}} {a 7}}) (hash) (list (fundef 'a 'x (varref 'x)))) 7)
