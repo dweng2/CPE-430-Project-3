@@ -41,6 +41,8 @@
 (define (parse-exp sexp)
   (match sexp
     [(? number? n)                   (num n)]
+    ['true (bool #t)]
+    ['false (bool #f)]
     [(? symbol? s)                   (varref s)]
     [(list (? unop-symbol? s) body) (unop (symbol->op s) (parse-exp body))]
     [(list (? binop-symbol? s) lhs rhs) (binop (symbol->op s) (parse-exp lhs) (parse-exp rhs))]
@@ -113,18 +115,22 @@
 (test (parse-exp '{double {double 5}}) (app 'double (app 'double (num 5))))
 (test (parse-exp '{+ {f 5} {g 6}}) (binop + (app 'f (num 5)) (app 'g (num 6))))
 
+(test (parse-exp 'true) (bool #t))
+(test (parse-exp 'false) (bool #f))
+(test (parse-exp '{not true}) (unop not (bool #t)))
+
 ; interp : CF1WAE? immutable-hash-table? (listof FunDef?) -> CF1WAE-Value?
 ; This procedure interprets the given CF1WAE in the given
 ;  environment with the given function definitions and
 ;  produces a result in the form of a CF1WAE-Value
 (define (interp exp env defs)
   (type-case CF1WAE exp
-    [num (n) n]
-    [str  (s) s]
-    [bool (b) b]
-    [mt () empty]
-    [unop (op body) (op (interp body env defs))]
-    [binop (op l r) (op (interp l env defs) (interp r env defs))]
+    [num (n) (numV n)]
+    [str  (s) (strV s)]
+    [bool (b) (boolV b)]
+    [mt () (mtV)]
+    [unop (op body) (boolV (op (get-value (interp body env defs))))]
+    [binop (op l r) (numV (op (get-value (interp l env defs)) (get-value (interp r env defs))))]
     [with (bindings body)
           (begin
             (define names (map binding-name bindings))
@@ -158,6 +164,15 @@
     [(hash-has-key? env name) (hash-ref env name)]
     [else (error "variable not defined")]))
 
+; get-value : CF1WAE-Value -> value
+; pulls the values out of the CF1WAE-Value
+(define (get-value in)
+  (type-case CF1WAE-Value in
+    [numV (n) n]
+    [strV (s) s]
+    [boolV (b) b]
+    [mtV () empty]
+    [pairV (f r)(error "Feature not implemented")]))
 ;; overlapping : (listof symbol?) -> boolean?
 ;; returns true when a symbol appears more than once in the list
 (define (overlapping? syms)
@@ -173,20 +188,21 @@
 (define unbound-var-msg "unbound variable")
 (define duplicated-var-msg "var name appears more than once")
 
-(test (interp (parse-exp '3) (hash) empty) 3)
-(test (interp (parse-exp '{+ 3 4}) (hash) empty) 7)
-(test (interp (parse-exp '{/ 12 6}) (hash) empty) 2)
-(test (interp (parse-exp '{* 12 7}) (hash) empty) 84)
-(test (interp (parse-exp '{- 12 5}) (hash) empty) 7)
-(test (interp (parse-exp '{with {{a = 6}} 5}) (hash) empty) 5)
-(test (interp (parse-exp '{with {{a = 6}} a}) (hash) empty) 6)
-(test (interp (parse-exp '{with {{a = 6}} {+ a 13}}) (hash) empty) 19)
-(test (interp (parse-exp '{with {{a = 7} {b = 8}} {+ 4 {* a b}}}) (hash) empty) 60)
+(test (interp (parse-exp '3) (hash) empty) (numV 3))
+(test (interp (parse-exp '{+ 3 4}) (hash) empty) (numV 7))
+(test (interp (parse-exp '{/ 12 6}) (hash) empty) (numV 2))
+(test (interp (parse-exp '{* 12 7}) (hash) empty) (numV 84))
+(test (interp (parse-exp '{- 12 5}) (hash) empty) (numV 7))
+(test (interp (parse-exp '{with {{a = 6}} 5}) (hash) empty) (numV 5))
+(test (interp (parse-exp '{with {{a = 6}} a}) (hash) empty) (numV 6))
+(test (interp (parse-exp '{with {{a = 6}} {+ a 13}}) (hash) empty) (numV 19))
+(test (interp (parse-exp '{with {{a = 7} {b = 8}} {+ 4 {* a b}}}) (hash) empty) (numV 60))
 (test/exn (interp (parse-exp '{with {{a = 7} {b = 3} {a = 9}} 13}) (hash) empty) duplicated-var-msg)
 (test/exn (interp (parse-exp '{with {{a = 7}} b}) (hash) empty) "not defined")
 
-(test (interp (parse-exp '{number? 1}) (hash) empty) true)
+(test (interp (parse-exp '{number? 1}) (hash) empty) (boolV #t))
 
-(test (interp (parse-exp '{a 5}) (hash) (list (fundef 'a 'x (varref 'x)))) 5)
-(test (interp (parse-exp '{with {{x = 1}} {a 7}}) (hash) (list (fundef 'a 'x (varref 'x)))) 7)
+(test (interp (parse-exp '{a 5}) (hash) (list (fundef 'a 'x (varref 'x)))) (numV 5))
+(test (interp (parse-exp '{with {{x = 1}} {a 7}}) (hash) (list (fundef 'a 'x (varref 'x)))) (numV 7))
 (test/exn (interp (parse-exp '{a 5}) (hash) empty) "function not")
+(test (interp (parse-exp '{not true}) (hash) empty) (boolV #false))
