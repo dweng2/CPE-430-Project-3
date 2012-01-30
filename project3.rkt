@@ -10,6 +10,9 @@
 (define-type Binding
   [binding (name symbol?) (named-expr CF1WAE?)])
 
+(define-type SClause
+  [sclause (equal-expr CF1WAE?) (body CF1WAE?)])
+
 ; represents an expression
 (define-type CF1WAE
   [num (n number?)]
@@ -20,7 +23,7 @@
   [binop (op any/c) (lhs CF1WAE?) (rhs CF1WAE?)]
   [with (lob (listof Binding?)) (body CF1WAE?)]
   [varref (name symbol?)]
-  ;[switch (val CF1WAE?) (clauses (listof SClause?)) (elseval CF1WAE?)]
+  [switch (val CF1WAE?) (clauses (listof SClause?)) (elseval CF1WAE?)]
   [app (f symbol?) (arg CF1WAE?)])
 
 ; represents a possible result of evaluation
@@ -54,7 +57,15 @@
      (with (map parse-binding bindings) 
            (parse-exp body))]
     [(list (? symbol? name) arg) (app name (parse-exp arg))]
+    [(list 'switch val c ... (list 'else l)) 
+     (switch (parse-exp val) (map parse-clause c) (parse-exp l))]
     [else                            (error 'parse-exp "* bad syntax: ~v" sexp)]))
+
+; listof list -> listof SClauses
+(define (parse-clause in)
+  (match in
+    [(list val '=> b) (sclause (parse-exp val) (parse-exp b))]
+    [else (error "bad syntax in switch statement")]))
 
 ;; parse-binding : sexp -> Binding
 ;; Consumes an s-expression and generates a Binding
@@ -145,6 +156,20 @@
 (test (parse-exp 'false) (bool false))
 (test (parse-exp '{not true}) (unop 'not (bool true)))
 
+(test (parse-exp '{switch {get-fruit 2}
+   ["apple" => "good choice!"]
+   [else "I don't recognize your so-called 'fruit'."]})
+      (switch (app 'get-fruit (num 2)) 
+              (list (sclause (str "apple") (str "good choice!")))
+              (str "I don't recognize your so-called 'fruit'.")))
+
+(test/exn (parse-exp '{switch {get-fruit 2}
+   ["apple" => "good choice!"]
+   [else "excellent choice!"]
+   [else "I don't recognize your so-called 'fruit'."]}) "switch statement")
+(test/exn (parse-exp '{switch {get-fruit 2}
+   ["apple" => "good choice!"]}) "bad syntax")
+
 ; interp : CF1WAE? immutable-hash-table? (listof FunDef?) -> CF1WAE-Value?
 ; This procedure interprets the given CF1WAE in the given
 ;  environment with the given function definitions and
@@ -176,6 +201,7 @@
                      (define argval (interp args env defs))
                      (define new-env (hash param argval))           
                      (interp body new-env defs))])]
+    [switch (val clauses elseval) (error "Not implemented yet")]
     [varref (s) (lookup-env s env)]))
 
 ; lookup-fundef : symbol fundef -> fundef
