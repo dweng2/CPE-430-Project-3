@@ -43,15 +43,16 @@
 ;; Consumes an s-expression and generates the corresponding CF1WAE
 (define (parse-exp sexp)
   (match sexp
-    [(? number? n)                   (num n)]
+    [(? number? n)           (num n)]
+    [(? string? s)           (str s)]
     ['true (bool #t)]
     ['false (bool #f)]
-    [(? symbol? s)                   (varref s)]
+    [(? symbol? s)           (varref s)]
     [(list (? unop-symbol? s) body) (unop s (parse-exp body))]
     [(list (? binop-symbol? s) lhs rhs) (binop s (parse-exp lhs) (parse-exp rhs))]
     [(list 'with (? list? bindings) body)
-                                     (with (map parse-binding bindings) 
-                                           (parse-exp body))]
+     (with (map parse-binding bindings) 
+           (parse-exp body))]
     [(list (? symbol? name) arg) (app name (parse-exp arg))]
     [else                            (error 'parse-exp "* bad syntax: ~v" sexp)]))
 
@@ -65,7 +66,7 @@
 ;; op-symbol? : symbol -> boolean
 ;; returns true exactly when s is a symbol representing a legal binop
 (define (binop-symbol? s)
-  (member s (list '+ '- '* '/)))
+  (member s (list '+ '- '* '/ 'equal? '<=)))
 
 ;; op-symbol? : symbol -> boolean
 ;; returns true exactly when s is a symbol representing a legal binop
@@ -83,6 +84,8 @@
     [(not) (lambda (a)(check_type_1 not boolean? a))]
     [(and) ((lambda (a b)(check_type_2 (lambda (x y) (and x y)) boolean? a b)) #t #t)]
     [(or) ((lambda (a b)(check_type_2 (lambda (x y) (or x y)) boolean? a b)) #t #t)]
+    [(equal?) equal?]
+    [(<=) (lambda (a b)(check_type_2 <= number? a b))]
     [(number?) number?]
     [(pair?) pair?]
     [(string?) string?]
@@ -92,7 +95,7 @@
     [else (error 'symbol->op 
                  "internal error: expected binop-symbol, got: ~v" s)]))
 
-; Does type checking
+; type checking functions
 (define (check_type_2 func type a b)
   (unless (type a) (error type-error))
   (unless (type b) (error type-error))
@@ -129,7 +132,6 @@
   (test/exn (parse-exp '{+ 3 4 5}) "bad syntax")
   (test/exn (parse-exp '{_ 2 3}) "bad syntax")
   (test/exn (parse-exp '{with {} 3 4 5}) "bad syntax")
-  (test/exn (parse-exp "abc") "bad syntax")
   (test/exn (parse-exp '{with 3 4}) "bad syntax")
   (test/exn (parse-exp '{with {{a b c}} 4}) "bad syntax")
   (test/exn (parse-exp '{with {{3 4}} 4})  "bad syntax"))
@@ -153,9 +155,9 @@
     [str  (s) (strV s)]
     [bool (b) (boolV b)]
     [mt () (mtV)]
-    [unop (op body) (boolV ((symbol->op op) (get-value (interp body env defs))))]
-    [binop (op l r) (numV ((symbol->op op) (get-value (interp l env defs)) 
-                                           (get-value (interp r env defs))))]
+    [unop (op body) (make-value ((symbol->op op) (get-value (interp body env defs))))]
+    [binop (op l r) (make-value ((symbol->op op) (get-value (interp l env defs)) 
+                                                 (get-value (interp r env defs))))]
     [with (bindings body)
           (begin
             (define names (map binding-name bindings))
@@ -198,6 +200,13 @@
     [boolV (b) b]
     [mtV () empty]
     [pairV (f r)(error "Feature not implemented")]))
+
+(define (make-value in)
+  (cond
+    [(number? in) (numV in)]
+    [(boolean? in) (boolV in)]
+    [(string? in) (strV in)]
+    [else (error "incorrect output value")]))
 ;; overlapping : (listof symbol?) -> boolean?
 ;; returns true when a symbol appears more than once in the list
 (define (overlapping? syms)
@@ -230,4 +239,12 @@
 (test (interp (parse-exp '{a 5}) (hash) (list (fundef 'a 'x (varref 'x)))) (numV 5))
 (test (interp (parse-exp '{with {{x = 1}} {a 7}}) (hash) (list (fundef 'a 'x (varref 'x)))) (numV 7))
 (test/exn (interp (parse-exp '{a 5}) (hash) empty) "function not")
-(test (interp (parse-exp '{not true}) (hash) empty) (boolV #false))
+(test (interp (parse-exp '{not true}) (hash) empty) (boolV false))
+(test/exn (interp (parse-exp '{not 6}) (hash) empty) type-error)
+(test/exn (interp (parse-exp '{+ true false}) (hash) empty) type-error)
+(test (interp (parse-exp "aString") (hash) empty) (strV "aString"))
+(test (interp (parse-exp '{equal? 1 1}) (hash) empty) (boolV true))
+(test (interp (parse-exp '{equal? 1 2}) (hash) empty) (boolV false))
+(test (interp (parse-exp '{equal? "bob" "bob"}) (hash) empty) (boolV true))
+(test (interp (parse-exp '{<= 1 2}) (hash) empty) (boolV true))
+(test (interp (parse-exp '{<= 10 2}) (hash) empty) (boolV false))
