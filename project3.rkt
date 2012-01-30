@@ -31,6 +31,9 @@
   [mtV]
   [pairV (first CF1WAE-Value?) (rest CF1WAE-Value?)])
 
+; error message for a type error
+(define type-error "Type Error")
+
 ; parse-fun : s-exp? -> FunDef?
 ; This procedure parses an s-expression into a FunDef
 (define (parse-fun exp)
@@ -44,8 +47,8 @@
     ['true (bool #t)]
     ['false (bool #f)]
     [(? symbol? s)                   (varref s)]
-    [(list (? unop-symbol? s) body) (unop (symbol->op s) (parse-exp body))]
-    [(list (? binop-symbol? s) lhs rhs) (binop (symbol->op s) (parse-exp lhs) (parse-exp rhs))]
+    [(list (? unop-symbol? s) body) (unop s (parse-exp body))]
+    [(list (? binop-symbol? s) lhs rhs) (binop s (parse-exp lhs) (parse-exp rhs))]
     [(list 'with (? list? bindings) body)
                                      (with (map parse-binding bindings) 
                                            (parse-exp body))]
@@ -70,13 +73,34 @@
   (member s (list 'not 'number? 'pair? 'string? 'null? 'first 'rest)))
 
 ;; symbol->op : symbol -> (number number -> number)
-;; Returns the binop that corresponds to a binop symbol
+;; Returns the op that corresponds to a op symbol
 (define (symbol->op s)
-  (case s [(+) +] [(-) -] [(*) *] [(/) /]
-    [(not) not] [(number?) number?] [(pair?) pair?] [(string?) string?]
-    [(null?) null?] [(first) first] [(rest) rest]
+  (case s 
+    [(+) (lambda (a b)(check_type_2 + number? a b))]
+    [(-) (lambda (a b)(check_type_2 - number? a b))]
+    [(*) (lambda (a b)(check_type_2 * number? a b))] 
+    [(/) (lambda (a b)(check_type_2 / number? a b))]
+    [(not) (lambda (a)(check_type_1 not boolean? a))]
+    [(and) ((lambda (a b)(check_type_2 (lambda (x y) (and x y)) boolean? a b)) #t #t)]
+    [(or) ((lambda (a b)(check_type_2 (lambda (x y) (or x y)) boolean? a b)) #t #t)]
+    [(number?) number?]
+    [(pair?) pair?]
+    [(string?) string?]
+    [(null?) null?]
+    [(first) first]
+    [(rest) rest]
     [else (error 'symbol->op 
                  "internal error: expected binop-symbol, got: ~v" s)]))
+
+; Does type checking
+(define (check_type_2 func type a b)
+  (unless (type a) (error type-error))
+  (unless (type b) (error type-error))
+  (func a b))
+
+(define (check_type_1 func type a)
+  (unless (type a) (error type-error))
+  (func a))
 
 ;(test/exn (symbol->op 'ab) "internal error")
 
@@ -86,21 +110,21 @@
       [n12 (num 12)])
  
   (test (parse-exp '13) (num 13))
-  (test (parse-exp '{+ 11 12}) (binop + n11 n12))
-  (test (parse-exp '{- 11 12}) (binop - n11 n12))
-  (test (parse-exp '{* 11 12}) (binop * n11 n12))
-  (test (parse-exp '{/ 11 12}) (binop / n11 n12))
-  (test (parse-exp '{* {+ 11 12} 11}) (binop * (binop + n11 n12) n11))
+  (test (parse-exp '{+ 11 12}) (binop '+ n11 n12))
+  (test (parse-exp '{- 11 12}) (binop '- n11 n12))
+  (test (parse-exp '{* 11 12}) (binop '* n11 n12))
+  (test (parse-exp '{/ 11 12}) (binop '/ n11 n12))
+  (test (parse-exp '{* {+ 11 12} 11}) (binop '* (binop '+ n11 n12) n11))
   (test (parse-exp '{with {{ab = {+ 11 12}} {cd = {with {{de = 4}} 6}}} cd})
-        (with (list (binding 'ab (binop + n11 n12))
+        (with (list (binding 'ab (binop '+ n11 n12))
                     (binding 'cd (with (list (binding 'de (num 4))) (num 6))))
               (varref 'cd)))
   (test (parse-exp '{with {} {+ 3 4}})
-        (with (list) (binop + (num 3) (num 4))))
+        (with (list) (binop '+ (num 3) (num 4))))
   (test (parse-exp '{with {{z = 4} {y = 9}} {+ y z}})
         (with (list (binding 'z (num 4))
                     (binding 'y (num 9)))
-              (binop + (varref 'y) (varref 'z))))
+              (binop '+ (varref 'y) (varref 'z))))
   ;; error checking
   (test/exn (parse-exp '{+ 3 4 5}) "bad syntax")
   (test/exn (parse-exp '{_ 2 3}) "bad syntax")
@@ -110,14 +134,14 @@
   (test/exn (parse-exp '{with {{a b c}} 4}) "bad syntax")
   (test/exn (parse-exp '{with {{3 4}} 4})  "bad syntax"))
 
-(test (parse-exp '{func (+ 1 2)}) (app 'func (binop + (num 1) (num 2))))
+(test (parse-exp '{func (+ 1 2)}) (app 'func (binop '+ (num 1) (num 2))))
 (test (parse-exp '{func 1}) (app 'func (num 1)))
 (test (parse-exp '{double {double 5}}) (app 'double (app 'double (num 5))))
-(test (parse-exp '{+ {f 5} {g 6}}) (binop + (app 'f (num 5)) (app 'g (num 6))))
+(test (parse-exp '{+ {f 5} {g 6}}) (binop '+ (app 'f (num 5)) (app 'g (num 6))))
 
-(test (parse-exp 'true) (bool #t))
-(test (parse-exp 'false) (bool #f))
-(test (parse-exp '{not true}) (unop not (bool #t)))
+(test (parse-exp 'true) (bool true))
+(test (parse-exp 'false) (bool false))
+(test (parse-exp '{not true}) (unop 'not (bool true)))
 
 ; interp : CF1WAE? immutable-hash-table? (listof FunDef?) -> CF1WAE-Value?
 ; This procedure interprets the given CF1WAE in the given
@@ -129,8 +153,9 @@
     [str  (s) (strV s)]
     [bool (b) (boolV b)]
     [mt () (mtV)]
-    [unop (op body) (boolV (op (get-value (interp body env defs))))]
-    [binop (op l r) (numV (op (get-value (interp l env defs)) (get-value (interp r env defs))))]
+    [unop (op body) (boolV ((symbol->op op) (get-value (interp body env defs))))]
+    [binop (op l r) (numV ((symbol->op op) (get-value (interp l env defs)) 
+                                           (get-value (interp r env defs))))]
     [with (bindings body)
           (begin
             (define names (map binding-name bindings))
