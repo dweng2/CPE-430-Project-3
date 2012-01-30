@@ -50,6 +50,7 @@
     [(? string? s)           (str s)]
     ['true (bool #t)]
     ['false (bool #f)]
+    ['null (mt)] 
     [(? symbol? s)           (varref s)]
     [(list (? unop-symbol? s) body) (unop s (parse-exp body))]
     [(list (? binop-symbol? s) lhs rhs) (binop s (parse-exp lhs) (parse-exp rhs))]
@@ -77,7 +78,7 @@
 ;; op-symbol? : symbol -> boolean
 ;; returns true exactly when s is a symbol representing a legal binop
 (define (binop-symbol? s)
-  (member s (list '+ '- '* '/ 'equal? '<=)))
+  (member s (list '+ '- '* '/ 'equal? '<= 'pair)))
 
 ;; op-symbol? : symbol -> boolean
 ;; returns true exactly when s is a symbol representing a legal binop
@@ -88,21 +89,22 @@
 ;; Returns the op that corresponds to a op symbol
 (define (symbol->op s)
   (case s 
-    [(+) (lambda (a b)(check_type_2 + number? a b))]
-    [(-) (lambda (a b)(check_type_2 - number? a b))]
-    [(*) (lambda (a b)(check_type_2 * number? a b))] 
-    [(/) (lambda (a b)(check_type_2 / number? a b))]
-    [(not) (lambda (a)(check_type_1 not boolean? a))]
-    [(and) ((lambda (a b)(check_type_2 (lambda (x y) (and x y)) boolean? a b)) #t #t)]
-    [(or) ((lambda (a b)(check_type_2 (lambda (x y) (or x y)) boolean? a b)) #t #t)]
+    [(+) (lambda (a b)(check_type_2 + number? (get-value a) (get-value b)))]
+    [(-) (lambda (a b)(check_type_2 - number? (get-value a) (get-value b)))]
+    [(*) (lambda (a b)(check_type_2 * number? (get-value a) (get-value b)))] 
+    [(/) (lambda (a b)(check_type_2 / number? (get-value a) (get-value b)))]
+    [(not) (lambda (a)(check_type_1 not boolean? (get-value a)))]
+    [(and) ((lambda (a b)(check_type_2 (lambda (x y) (and x y)) boolean? (get-value a) (get-value b))) #t #t)]
+    [(or) ((lambda (a b)(check_type_2 (lambda (x y) (or x y)) boolean? (get-value a) (get-value b))) #t #t)]
     [(equal?) equal?]
-    [(<=) (lambda (a b)(check_type_2 <= number? a b))]
-    [(number?) number?]
-    [(pair?) pair?]
-    [(string?) string?]
-    [(null?) null?]
-    [(first) first]
-    [(rest) rest]
+    [(<=) (lambda (a b)(check_type_2 <= number? (get-value a) (get-value b)))]
+    [(number?) numV?]
+    [(pair?) pairV?]
+    [(pair) (lambda (a b) (pairV a b))]
+    [(string?) strV?]
+    [(null?) mtV?]
+    [(first) (lambda (a)(check_type_1 pairV-first pairV? a))]
+    [(rest) (lambda (a)(check_type_1 pairV-rest pairV? a))]
     [else (error 'symbol->op 
                  "internal error: expected binop-symbol, got: ~v" s)]))
 
@@ -170,6 +172,9 @@
 (test/exn (parse-exp '{switch {get-fruit 2}
    ["apple" => "good choice!"]}) "bad syntax")
 
+(test (parse-exp '{pair null null}) (binop 'pair (mt) (mt)))
+(test (parse-exp '{pair "String" null}) (binop 'pair (str "String") (mt)))
+ 
 ; interp : CF1WAE? immutable-hash-table? (listof FunDef?) -> CF1WAE-Value?
 ; This procedure interprets the given CF1WAE in the given
 ;  environment with the given function definitions and
@@ -180,9 +185,9 @@
     [str  (s) (strV s)]
     [bool (b) (boolV b)]
     [mt () (mtV)]
-    [unop (op body) (make-value ((symbol->op op) (get-value (interp body env defs))))]
-    [binop (op l r) (make-value ((symbol->op op) (get-value (interp l env defs)) 
-                                                 (get-value (interp r env defs))))]
+    [unop (op body) (make-value ((symbol->op op) (interp body env defs)))]
+    [binop (op l r) (make-value ((symbol->op op) (interp l env defs)  
+                                                 (interp r env defs)))]
     [with (bindings body)
           (begin
             (define names (map binding-name bindings))
@@ -231,15 +236,15 @@
     [numV (n) n]
     [strV (s) s]
     [boolV (b) b]
-    [mtV () empty]
-    [pairV (f r)(error "Feature not implemented")]))
+    [mtV () (mtV)]
+    [pairV (f r) (pairV f r)]))
 
 (define (make-value in)
   (cond
     [(number? in) (numV in)]
     [(boolean? in) (boolV in)]
     [(string? in) (strV in)]
-    [else (error "incorrect output value")]))
+    [else in]))
 
 (define (eval-clause check equal-val body)
   (cond
@@ -289,5 +294,18 @@
 (test (interp (parse-exp '{<= 10 2}) (hash) empty) (boolV false))
 (test (interp (parse-exp '{switch true [true => true][else false]}) (hash) empty) (boolV true))
 (test (interp (parse-exp '{switch false [true => true][else false]}) (hash) empty) (boolV false))
-(test (interp (parse-exp '{switch true [true => (+ 10 5)][else false]}) (hash) empty) (boolV true))
+(test (interp (parse-exp '{switch true [true => (+ 10 5)][else false]}) (hash) empty) (numV 15))
 (test (interp (parse-exp '{switch (+ 1 1) [2 => true][else false]}) (hash) empty) (boolV true))
+(test (interp (parse-exp '{switch "durian"
+   ["apple" => "good choice!"]
+   ["banana" => "excellent choice!"]
+   ["durian" => "Hmm, I'm not sure your taxi driver is going to like that."]
+   [else "I don't recognize your so-called 'fruit'."]}) (hash) empty) (strV "Hmm, I'm not sure your taxi driver is going to like that."))
+
+(test (interp (parse-exp '{pair null null}) (hash) empty) (pairV (mtV) (mtV)))
+(test (interp (parse-exp '{pair "string" null}) (hash) empty) (pairV (strV "string") (mtV)))
+(test (interp (parse-exp '{pair? {pair null null}}) (hash) empty) (boolV true))
+(test (interp (parse-exp '{null? null}) (hash) empty) (boolV true))
+(test (interp (parse-exp '{first {pair "string" null}}) (hash) empty) (strV "string"))
+(test (interp (parse-exp '{rest {pair "string" null}}) (hash) empty) (mtV))
+(test (interp (parse-exp '{rest {pair "string" {pair "bob" null}}}) (hash) empty) (pairV (strV "bob") (mtV)))
