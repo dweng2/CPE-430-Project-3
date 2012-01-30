@@ -201,7 +201,14 @@
                      (define argval (interp args env defs))
                      (define new-env (hash param argval))           
                      (interp body new-env defs))])]
-    [switch (val clauses elseval) (error "Not implemented yet")]
+    [switch (val clauses elseval) 
+            (begin
+              (define equal-exprs (append (map sclause-equal-expr clauses) (list val)))
+              (define equal-vals (map (lambda (expr) (interp expr env defs)) equal-exprs))
+              (define clause-body (append (map sclause-body clauses) (list elseval)))
+              (interp (ormap (lambda (x y) (eval-clause (interp val env defs) x y)) 
+                             equal-vals clause-body) 
+                      env defs))]
     [varref (s) (lookup-env s env)]))
 
 ; lookup-fundef : symbol fundef -> fundef
@@ -233,6 +240,12 @@
     [(boolean? in) (boolV in)]
     [(string? in) (strV in)]
     [else (error "incorrect output value")]))
+
+(define (eval-clause check equal-val body)
+  (cond
+    [(equal? check equal-val) body]
+    [else #f]))
+
 ;; overlapping : (listof symbol?) -> boolean?
 ;; returns true when a symbol appears more than once in the list
 (define (overlapping? syms)
@@ -274,3 +287,7 @@
 (test (interp (parse-exp '{equal? "bob" "bob"}) (hash) empty) (boolV true))
 (test (interp (parse-exp '{<= 1 2}) (hash) empty) (boolV true))
 (test (interp (parse-exp '{<= 10 2}) (hash) empty) (boolV false))
+(test (interp (parse-exp '{switch true [true => true][else false]}) (hash) empty) (boolV true))
+(test (interp (parse-exp '{switch false [true => true][else false]}) (hash) empty) (boolV false))
+(test (interp (parse-exp '{switch true [true => (+ 10 5)][else false]}) (hash) empty) (boolV true))
+(test (interp (parse-exp '{switch (+ 1 1) [2 => true][else false]}) (hash) empty) (boolV true))
