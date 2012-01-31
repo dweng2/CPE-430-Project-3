@@ -43,8 +43,26 @@
 (define (parse-fun exp)
   (match exp
     [(list 'fun (? symbol? name) (? list? params) body)
-     (fundef name params (parse-exp body))]
+     (begin
+       (valid-name name)
+       (for-each valid-name params)
+       (when (overlapping? params)
+         (error 'parse-fun 
+                "param name appears more than once in function def ~v"
+                params))
+       (fundef name params (parse-exp body)))]
     [else (error "Bad function def syntax")]))
+
+(define (valid-name name) 
+  (when (or (unop-symbol? name) (binop-symbol? name) (symbol=? 'with name))
+         (error "Invalid function name")))
+
+;; overlapping : (listof symbol?) -> boolean?
+;; returns true when a symbol appears more than once in the list
+(define (overlapping? syms)
+  (cond [(empty? syms) false]
+        [else (or (member (first syms) (rest syms))
+                  (overlapping? (rest syms)))]))
 
 ;; parse-exp : s-exp -> CF1WAE
 ;; Consumes an s-expression and generates the corresponding CF1WAE
@@ -55,18 +73,26 @@
     ['true (bool #t)]
     ['false (bool #f)]
     ['null (mt)] 
-    [(? symbol? s)           (varref s)]
+    [(? symbol? s)
+     (begin
+       (valid-name s)
+       (varref s))]
     [(list (? unop-symbol? s) body) (unop s (parse-exp body))]
     [(list (? binop-symbol? s) lhs rhs) (binop s (parse-exp lhs) (parse-exp rhs))]
     [(list 'with (? list? bindings) body)
-     (with (map parse-binding bindings) 
-           (parse-exp body))]
+     (begin
+       (define names (map first bindings))
+       (when (overlapping? names)
+         (error 'parse-exp 
+                "var name appears more than once in bindings: ~v"
+                names))
+       (with (map parse-binding bindings) 
+             (parse-exp body)))]
     [(list 'switch val c ... (list 'else l)) 
      (switch (parse-exp val) (map parse-clause c) (parse-exp l))]
     [(list (? symbol? name) args ...)
      (begin
-       (when (or (unop-symbol? name) (binop-symbol? name) (symbol=? 'with name))
-         (error "Invalid function name"))
+       (valid-name name)
        (app name (map parse-exp args)))]
     [else (error 'parse-exp "* bad syntax: ~v" sexp)]))
 
@@ -86,7 +112,7 @@
 ;; op-symbol? : symbol -> boolean
 ;; returns true exactly when s is a symbol representing a legal binop
 (define (binop-symbol? s)
-  (member s (list '+ '- '* '/ 'equal? '<= 'pair)))
+  (member s (list '+ '- '* '/ 'equal? '<= 'pair 'and 'or)))
 
 ;; op-symbol? : symbol -> boolean
 ;; returns true exactly when s is a symbol representing a legal binop
@@ -102,8 +128,8 @@
     [(*) (lambda (a b)(check_type_2 * number? (get-value a) (get-value b)))] 
     [(/) (lambda (a b)(check_type_2 / number? (get-value a) (get-value b)))]
     [(not) (lambda (a)(check_type_1 not boolean? (get-value a)))]
-    [(and) ((lambda (a b)(check_type_2 (lambda (x y) (and x y)) boolean? (get-value a) (get-value b))) #t #t)]
-    [(or) ((lambda (a b)(check_type_2 (lambda (x y) (or x y)) boolean? (get-value a) (get-value b))) #t #t)]
+    [(and) (lambda (a b)(check_type_2 (lambda (x y) (and x y)) boolean? (get-value a) (get-value b)))]
+    [(or) (lambda (a b)(check_type_2 (lambda (x y) (or x y)) boolean? (get-value a) (get-value b)))]    
     [(equal?) equal?]
     [(<=) (lambda (a b)(check_type_2 <= number? (get-value a) (get-value b)))]
     [(number?) numV?]
@@ -115,6 +141,8 @@
     [(rest) (lambda (a)(check_type_1 pairV-rest pairV? a))]
     [else (error 'symbol->op 
                  "internal error: expected binop-symbol, got: ~v" s)]))
+
+(test/exn (symbol->op 'asdf) "internal")
 
 ; type checking functions
 (define (check_type_2 func type a b)
@@ -186,6 +214,7 @@
 (test (parse-fun '{fun my-fun {x} (+ x x)}) (fundef 'my-fun (list 'x) (binop '+ (varref 'x) (varref 'x))))
 (test (parse-fun '{fun one {} {+ 1 1}}) (fundef 'one '() (binop '+ (num 1) (num 1))))
 (test/exn (parse-fun '{adf a a}) "def syntax")
+(test/exn (parse-exp '{z with}) "Invalid function")
 ; interp : CF1WAE? immutable-hash-table? (listof FunDef?) -> CF1WAE-Value?
 ; This procedure interprets the given CF1WAE in the given
 ;  environment with the given function definitions and
@@ -203,21 +232,13 @@
           (begin
             (define names (map binding-name bindings))
             (define rhses (map binding-named-expr bindings))
-            (when (overlapping? names)
-              (error 'interp 
-                     "var name appears more than once in bindings: ~v"
-                     names))
-            (define rhs-vals (map (lambda (expr) (interp expr env defs)) rhses))
-            (define new-env (foldl (lambda (n v e) (hash-set e n v)) (hash) names rhs-vals))
+            (define rhs-vals (map (lambda (expr) (interp expr env defs)) rhses))            
+            (define new-env (foldl (lambda (n v e) (hash-set e n v)) env names rhs-vals))
             (interp body new-env defs))]
     [app (name args) 
          (type-case FunDef (lookup-fundef name defs)
            [fundef (name params body)
                    (let ()
-                     (when (overlapping? params)
-                       (error 'interp 
-                              "param name appears more than once in function def ~v"
-                              params))
                      (define argvals (map (lambda (expr) (interp expr env defs)) args))
                      (define new-env (foldl (lambda (n v e) (hash-set e n v)) (hash) params argvals))
                      (interp body new-env defs))])]
@@ -251,8 +272,7 @@
     [numV (n) n]
     [strV (s) s]
     [boolV (b) b]
-    [mtV () (mtV)]
-    [pairV (f r) (pairV f r)]))
+    [else in]))
 
 (define (make-value in)
   (cond
@@ -261,17 +281,13 @@
     [(string? in) (strV in)]
     [else in]))
 
+(test (make-value "str") (strV "str"))
+(test (get-value (mtV)) (mtV))
+
 (define (eval-clause check equal-val body)
   (cond
     [(equal? check equal-val) body]
     [else #f]))
-
-;; overlapping : (listof symbol?) -> boolean?
-;; returns true when a symbol appears more than once in the list
-(define (overlapping? syms)
-  (cond [(empty? syms) false]
-        [else (or (member (first syms) (rest syms))
-                  (overlapping? (rest syms)))]))
 
 ;; test cases for overlapping?
 (test (overlapping? '(a b c b d)) '(b d))
@@ -290,11 +306,9 @@
 (test (interp (parse-exp '{with {{a = 6}} a}) (hash) empty) (numV 6))
 (test (interp (parse-exp '{with {{a = 6}} {+ a 13}}) (hash) empty) (numV 19))
 (test (interp (parse-exp '{with {{a = 7} {b = 8}} {+ 4 {* a b}}}) (hash) empty) (numV 60))
-(test/exn (interp (parse-exp '{with {{a = 7} {b = 3} {a = 9}} 13}) (hash) empty) duplicated-var-msg)
 (test/exn (interp (parse-exp '{with {{a = 7}} b}) (hash) empty) "not defined")
 
 (test (interp (parse-exp '{number? 1}) (hash) empty) (boolV #t))
-(fundef 'a (list 'x) (varref 'x))
 (test (interp (parse-exp '{a 5}) (hash) (list (parse-fun '{fun a {x} x}))) (numV 5))
 (test (interp (parse-exp '{with {{x = 1}} {a 7}}) (hash) (list (fundef 'a (list 'x) (varref 'x)))) (numV 7))
 (test/exn (interp (parse-exp '{a 5}) (hash) empty) "function not")
@@ -324,4 +338,13 @@
 (test (interp (parse-exp '{first {pair "string" null}}) (hash) empty) (strV "string"))
 (test (interp (parse-exp '{rest {pair "string" null}}) (hash) empty) (mtV))
 (test (interp (parse-exp '{rest {pair "string" {pair "bob" null}}}) (hash) empty) (pairV (strV "bob") (mtV)))
-(test/exn (interp (parse-exp '{a 5}) (hash) (list (fundef 'a (list 'x 'x) (varref 'x)))) "param")
+(test/exn (interp (parse-exp '{a 5}) (hash) (list (parse-fun '(fun a (x x) x)))) "param")
+
+(test (interp (parse-exp '{and true true}) (hash) empty) (boolV true))
+(test (interp (parse-exp '{or false true}) (hash) empty) (boolV true))
+(test (interp (parse-exp '{string? "adfaf"}) (hash) empty) (boolV true))
+(test/exn (interp (parse-exp '{and true "t"}) (hash) empty) type-error)
+(test (interp (parse-exp '{b 5}) (hash) (list (parse-fun '{fun a {x} x}) (parse-fun '{fun b {x} x}))) (numV 5))
+(test/exn (parse-exp '{with {{x = 3}{x = 4}}x}) "more than once")
+(interp (parse-exp '{with {{a = 1}} {with {{b = 2}} {+ a b}}}) (hash) empty)
+;(test (interp (parse-exp '{with {{a = 4} {b = 5} {with {{c = {* b 4}} {d = {+ 4 a}}} {+ {- b c} {* a d}}}}})))
