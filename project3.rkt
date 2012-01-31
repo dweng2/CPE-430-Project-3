@@ -4,14 +4,15 @@
 
 ; represents a function definition
 (define-type FunDef
-  (fundef (name symbol?) (params symbol?) (body CF1WAE?)))
+  (fundef (name symbol?) (params (listof symbol?)) (body CF1WAE?)))
  
 ; represents a binding in a with expression
 (define-type Binding
   [binding (name symbol?) (named-expr CF1WAE?)])
 
+; represents a 'switch' clause
 (define-type SClause
-  [sclause (equal-expr CF1WAE?) (body CF1WAE?)])
+  [clause (patval CF1WAE?) (result CF1WAE?)])
 
 ; represents an expression
 (define-type CF1WAE
@@ -24,7 +25,7 @@
   [with (lob (listof Binding?)) (body CF1WAE?)]
   [varref (name symbol?)]
   [switch (val CF1WAE?) (clauses (listof SClause?)) (elseval CF1WAE?)]
-  [app (f symbol?) (arg CF1WAE?)])
+  [app (f symbol?) (args (listof CF1WAE?))])
 
 ; represents a possible result of evaluation
 (define-type CF1WAE-Value
@@ -40,7 +41,10 @@
 ; parse-fun : s-exp? -> FunDef?
 ; This procedure parses an s-expression into a FunDef
 (define (parse-fun exp)
-  (error "DONT CALL THIS YET"))
+  (match exp
+    [(list 'fun (? symbol? name) (? list? params) body)
+     (fundef name params (parse-exp body))]
+    [else (error "Bad function def syntax")]))
 
 ;; parse-exp : s-exp -> CF1WAE
 ;; Consumes an s-expression and generates the corresponding CF1WAE
@@ -57,15 +61,19 @@
     [(list 'with (? list? bindings) body)
      (with (map parse-binding bindings) 
            (parse-exp body))]
-    [(list (? symbol? name) arg) (app name (parse-exp arg))]
     [(list 'switch val c ... (list 'else l)) 
      (switch (parse-exp val) (map parse-clause c) (parse-exp l))]
-    [else                            (error 'parse-exp "* bad syntax: ~v" sexp)]))
+    [(list (? symbol? name) args ...)
+     (begin
+       (when (or (unop-symbol? name) (binop-symbol? name) (symbol=? 'with name))
+         (error "Invalid function name"))
+       (app name (map parse-exp args)))]
+    [else (error 'parse-exp "* bad syntax: ~v" sexp)]))
 
 ; listof list -> listof SClauses
 (define (parse-clause in)
   (match in
-    [(list val '=> b) (sclause (parse-exp val) (parse-exp b))]
+    [(list val '=> b) (clause (parse-exp val) (parse-exp b))]
     [else (error "bad syntax in switch statement")]))
 
 ;; parse-binding : sexp -> Binding
@@ -142,17 +150,17 @@
                     (binding 'y (num 9)))
               (binop '+ (varref 'y) (varref 'z))))
   ;; error checking
-  (test/exn (parse-exp '{+ 3 4 5}) "bad syntax")
-  (test/exn (parse-exp '{_ 2 3}) "bad syntax")
-  (test/exn (parse-exp '{with {} 3 4 5}) "bad syntax")
-  (test/exn (parse-exp '{with 3 4}) "bad syntax")
+  (test/exn (parse-exp '{+ 3 4 5}) "Invalid function")
+  (test (parse-exp '{_ 2 3}) (app '_ (list (num 2) (num 3))))
+  (test/exn (parse-exp '{with {} 3 4 5}) "Invalid function")
+  (test/exn (parse-exp '{with 3 4}) "Invalid function")
   (test/exn (parse-exp '{with {{a b c}} 4}) "bad syntax")
   (test/exn (parse-exp '{with {{3 4}} 4})  "bad syntax"))
 
-(test (parse-exp '{func (+ 1 2)}) (app 'func (binop '+ (num 1) (num 2))))
-(test (parse-exp '{func 1}) (app 'func (num 1)))
-(test (parse-exp '{double {double 5}}) (app 'double (app 'double (num 5))))
-(test (parse-exp '{+ {f 5} {g 6}}) (binop '+ (app 'f (num 5)) (app 'g (num 6))))
+(test (parse-exp '{func (+ 1 2)}) (app 'func (list (binop '+ (num 1) (num 2)))))
+(test (parse-exp '{func 1}) (app 'func (list (num 1))))
+(test (parse-exp '{double {double 5}}) (app 'double (list (app 'double (list (num 5))))))
+(test (parse-exp '{+ {f 5} {g 6}}) (binop '+ (app 'f (list (num 5))) (app 'g (list (num 6)))))
 
 (test (parse-exp 'true) (bool true))
 (test (parse-exp 'false) (bool false))
@@ -161,8 +169,8 @@
 (test (parse-exp '{switch {get-fruit 2}
    ["apple" => "good choice!"]
    [else "I don't recognize your so-called 'fruit'."]})
-      (switch (app 'get-fruit (num 2)) 
-              (list (sclause (str "apple") (str "good choice!")))
+      (switch (app 'get-fruit (list (num 2))) 
+              (list (clause (str "apple") (str "good choice!")))
               (str "I don't recognize your so-called 'fruit'.")))
 
 (test/exn (parse-exp '{switch {get-fruit 2}
@@ -174,7 +182,10 @@
 
 (test (parse-exp '{pair null null}) (binop 'pair (mt) (mt)))
 (test (parse-exp '{pair "String" null}) (binop 'pair (str "String") (mt)))
- 
+
+(test (parse-fun '{fun my-fun {x} (+ x x)}) (fundef 'my-fun (list 'x) (binop '+ (varref 'x) (varref 'x))))
+(test (parse-fun '{fun one {} {+ 1 1}}) (fundef 'one '() (binop '+ (num 1) (num 1))))
+(test/exn (parse-fun '{adf a a}) "def syntax")
 ; interp : CF1WAE? immutable-hash-table? (listof FunDef?) -> CF1WAE-Value?
 ; This procedure interprets the given CF1WAE in the given
 ;  environment with the given function definitions and
@@ -201,16 +212,20 @@
             (interp body new-env defs))]
     [app (name args) 
          (type-case FunDef (lookup-fundef name defs)
-           [fundef (name param body)
+           [fundef (name params body)
                    (let ()
-                     (define argval (interp args env defs))
-                     (define new-env (hash param argval))           
+                     (when (overlapping? params)
+                       (error 'interp 
+                              "param name appears more than once in function def ~v"
+                              params))
+                     (define argvals (map (lambda (expr) (interp expr env defs)) args))
+                     (define new-env (foldl (lambda (n v e) (hash-set e n v)) (hash) params argvals))
                      (interp body new-env defs))])]
     [switch (val clauses elseval) 
             (begin
-              (define equal-exprs (append (map sclause-equal-expr clauses) (list val)))
+              (define equal-exprs (append (map clause-patval clauses) (list val)))
               (define equal-vals (map (lambda (expr) (interp expr env defs)) equal-exprs))
-              (define clause-body (append (map sclause-body clauses) (list elseval)))
+              (define clause-body (append (map clause-result clauses) (list elseval)))
               (interp (ormap (lambda (x y) (eval-clause (interp val env defs) x y)) 
                              equal-vals clause-body) 
                       env defs))]
@@ -279,9 +294,9 @@
 (test/exn (interp (parse-exp '{with {{a = 7}} b}) (hash) empty) "not defined")
 
 (test (interp (parse-exp '{number? 1}) (hash) empty) (boolV #t))
-
-(test (interp (parse-exp '{a 5}) (hash) (list (fundef 'a 'x (varref 'x)))) (numV 5))
-(test (interp (parse-exp '{with {{x = 1}} {a 7}}) (hash) (list (fundef 'a 'x (varref 'x)))) (numV 7))
+(fundef 'a (list 'x) (varref 'x))
+(test (interp (parse-exp '{a 5}) (hash) (list (parse-fun '{fun a {x} x}))) (numV 5))
+(test (interp (parse-exp '{with {{x = 1}} {a 7}}) (hash) (list (fundef 'a (list 'x) (varref 'x)))) (numV 7))
 (test/exn (interp (parse-exp '{a 5}) (hash) empty) "function not")
 (test (interp (parse-exp '{not true}) (hash) empty) (boolV false))
 (test/exn (interp (parse-exp '{not 6}) (hash) empty) type-error)
@@ -309,3 +324,4 @@
 (test (interp (parse-exp '{first {pair "string" null}}) (hash) empty) (strV "string"))
 (test (interp (parse-exp '{rest {pair "string" null}}) (hash) empty) (mtV))
 (test (interp (parse-exp '{rest {pair "string" {pair "bob" null}}}) (hash) empty) (pairV (strV "bob") (mtV)))
+(test/exn (interp (parse-exp '{a 5}) (hash) (list (fundef 'a (list 'x 'x) (varref 'x)))) "param")
